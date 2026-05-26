@@ -23,12 +23,45 @@ if __name__ == "__main__":
             self.grid_shape = grid_shape
             self.grid =nn.Parameter(torch.randn(*grid_shape)*0.01)
         def forward(self, coords):
-            # coords: (N, 2) in [-1, 1]
-            # Map to [0, grid_res-1]
-            coords = (coords + 1) / 2 * (self.grid_shape[0] - 1)
-            x_idx = torch.clamp(coords[:, 0].long(), 0, self.grid_shape[0] - 1)
-            y_idx = torch.clamp(coords[:, 1].long(), 0, self.grid_shape[1] - 1)
-            features = self.grid[x_idx, y_idx]  # (N, feature_dim)
+
+            # Map from [-1,1] → [0,res-1]
+            coords = (coords + 1) / 2
+            coords = coords * (self.grid_shape[0] - 1)
+
+            x = coords[:, 0]
+            y = coords[:, 1]
+
+            # Integer corner coordinates
+            x0 = torch.floor(x).long()
+            x1 = x0 + 1
+
+            y0 = torch.floor(y).long()
+            y1 = y0 + 1
+
+            # Clamp bounds
+            x0 = torch.clamp(x0, 0, self.grid_shape[0] - 1)
+            x1 = torch.clamp(x1, 0, self.grid_shape[0] - 1)
+
+            y0 = torch.clamp(y0, 0, self.grid_shape[1] - 1)
+            y1 = torch.clamp(y1, 0, self.grid_shape[1] - 1)
+
+            # Retrieve corner features
+            f00 = self.grid[x0, y0]
+            f10 = self.grid[x1, y0]
+            f01 = self.grid[x0, y1]
+            f11 = self.grid[x1, y1]
+
+            # Fractional offsets
+            wx = (x - x0.float()).unsqueeze(-1)
+            wy = (y - y0.float()).unsqueeze(-1)
+
+            # Interpolate along x
+            fx0 = f00 * (1 - wx) + f10 * wx
+            fx1 = f01 * (1 - wx) + f11 * wx
+
+            # Interpolate along y
+            features = fx0 * (1 - wy) + fx1 * wy
+
             return features
     
     gridencoder = GridEncoder(grid_shape)
