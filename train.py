@@ -6,25 +6,40 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     model = torch.nn.Sequential(
-        torch.nn.Linear(2, 64),
+        torch.nn.Linear(4, 32),
         torch.nn.ReLU(),
-        torch.nn.Linear(64, 64),
-        torch.nn.ReLU(),
-        torch.nn.Linear(64, 1),
+        torch.nn.Linear(32, 1),
         torch.nn.Sigmoid()
     )
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    criterion = torch.nn.MSELoss()
-
     radius = 0.5
-
+    criterion = torch.nn.MSELoss()
+    grid_res=32
+    feature_dim=4
+    grid_shape = (grid_res, grid_res,feature_dim)
+    class GridEncoder(nn.Module):
+        def __init__(self, grid_shape):
+            super().__init__()
+            self.grid_shape = grid_shape
+            self.grid =nn.Parameter(torch.randn(*grid_shape)*0.01)
+        def forward(self, coords):
+            # coords: (N, 2) in [-1, 1]
+            # Map to [0, grid_res-1]
+            coords = (coords + 1) / 2 * (self.grid_shape[0] - 1)
+            x_idx = torch.clamp(coords[:, 0].long(), 0, self.grid_shape[0] - 1)
+            y_idx = torch.clamp(coords[:, 1].long(), 0, self.grid_shape[1] - 1)
+            features = self.grid[x_idx, y_idx]  # (N, feature_dim)
+            return features
+    
+    gridencoder = GridEncoder(grid_shape)
+    
+    optimizer = torch.optim.Adam(
+        list(model.parameters()) +
+        list(gridencoder.parameters()),
+        lr=1e-3
+    )
     for epoch in tqdm(range(1000)):
-
-        # Uniform samples in [-1, 1]
-        inputs = 2 * torch.rand(32, 2) - 1
-
+        inputs = torch.rand(1024, 2) * 2 - 1  # Random points in [-1, 1]
         # Circle occupancy labels
         targets = (
             torch.sum(inputs ** 2, dim=1, keepdim=True)
@@ -32,7 +47,7 @@ if __name__ == "__main__":
         ).float()
 
         # Forward pass
-        outputs = model(inputs)
+        outputs = model(gridencoder(inputs))
 
         loss = criterion(outputs, targets)
 
@@ -45,16 +60,29 @@ if __name__ == "__main__":
             print(f"Epoch {epoch+1}, Loss: {loss.item():.6f}")
 
 
+    # ==========================================
+    # Visualization
+    # ==========================================
+
     resolution = 200
+
     x = torch.linspace(-1, 1, resolution)
     y = torch.linspace(-1, 1, resolution)
 
     xx, yy = torch.meshgrid(x, y, indexing='xy')
 
-    grid = torch.stack([xx.flatten(), yy.flatten()], dim=-1)
-    # Run model
+    # Create coordinate grid
+    coords = torch.stack(
+        [xx.flatten(), yy.flatten()],
+        dim=-1
+    )
+
+    # Run through encoder + model
     with torch.no_grad():
-        predictions = model(grid)
+
+        features = gridencoder(coords)
+
+        predictions = model(features)
 
     # Reshape into image
     image = predictions.reshape(resolution, resolution)
@@ -71,7 +99,7 @@ if __name__ == "__main__":
 
     plt.colorbar(label='Occupancy Probability')
 
-    plt.title('Learned Occupancy Field')
+    plt.title('Grid-Encoded Occupancy Field')
 
     plt.xlabel('X')
     plt.ylabel('Y')
