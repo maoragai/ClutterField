@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
 
     model = torch.nn.Sequential(
-        torch.nn.Linear(4, 32),
+        torch.nn.Linear(16, 32),
         torch.nn.ReLU(),
         torch.nn.Linear(32, 1),
         torch.nn.Sigmoid()
@@ -14,9 +14,13 @@ if __name__ == "__main__":
 
     radius = 0.5
     criterion = torch.nn.MSELoss()
-    grid_res=32
+    coarse_grid_res=8
+    mid_grid_res = coarse_grid_res * 2
+    fine_grid_res = coarse_grid_res * 4
+    ultra_grid_res = coarse_grid_res * 8
     feature_dim=4
-    grid_shape = (grid_res, grid_res,feature_dim)
+    
+    grid_shape = (mid_grid_res, mid_grid_res, feature_dim)
     class GridEncoder(nn.Module):
         def __init__(self, grid_shape):
             super().__init__()
@@ -64,8 +68,45 @@ if __name__ == "__main__":
 
             return features
     
-    gridencoder = GridEncoder(grid_shape)
     
+    class MultiResolutionGridEncoder(nn.Module):
+
+            def __init__(self,
+                        resolutions,
+                        feature_dim):
+
+                super().__init__()
+
+                self.encoders = nn.ModuleList()
+
+                for res in resolutions:
+
+                    grid_shape = (
+                        res,
+                        res,
+                        feature_dim
+                    )
+
+                    self.encoders.append(
+                        GridEncoder(grid_shape)
+                    )
+
+            def forward(self, coords):
+
+                features = []
+
+                for encoder in self.encoders:
+
+                    feat = encoder(coords)
+
+                    features.append(feat)
+
+                return torch.cat(features, dim=-1)
+    gridencoder = MultiResolutionGridEncoder(
+        resolutions=[coarse_grid_res, mid_grid_res, fine_grid_res, ultra_grid_res],
+        feature_dim=feature_dim
+        )
+
     optimizer = torch.optim.Adam(
         list(model.parameters()) +
         list(gridencoder.parameters()),
