@@ -1,207 +1,371 @@
+import math
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from tqdm import tqdm
 import matplotlib.pyplot as plt
-if __name__ == "__main__":
+from tqdm import tqdm
 
-    model = torch.nn.Sequential(
-        torch.nn.Linear(16, 32),
-        torch.nn.ReLU(),
-        torch.nn.Linear(32, 1),
-        torch.nn.Sigmoid()
+
+# ============================================================
+# Gaussian Target
+# ============================================================
+
+def gaussian_2d(xx, yy, x0, y0, sigma=0.05):
+
+    return torch.exp(
+        -((xx - x0) ** 2 + (yy - y0) ** 2)
+        / (2 * sigma**2)
     )
 
-    radius = 0.5
-    criterion = torch.nn.MSELoss()
-    coarse_grid_res=32
-    mid_grid_res = coarse_grid_res * 2 
-    fine_grid_res = coarse_grid_res  * 4
-    ultra_grid_res = coarse_grid_res    * 8
-    feature_dim=4
-    
-    # grid_shape = (mid_grid_res, mid_grid_res, feature_dim)
-    def spatial_hash(coords:torch.Tensor, 
-                     table_size:torch.Tensor):
-        x = coords[:, 0].long()
-        y = coords[:, 1].long()
 
-        # Simple hash: (x * prime1 + y * prime2) % table_size
-        prime1 = 73856093
-        prime2 = 19349663
-        table_size = table_size 
+# ============================================================
+# Hash Grid Encoder
+# ============================================================
 
-        indices = (x * prime1 + y * prime2) % table_size
+class HashGridEncoder(nn.Module):
 
-        return indices
-    
-    class GridEncoder(nn.Module):
-        def __init__(self, grid_shape):
-            super().__init__()
-            self.resolution = grid_shape[0]
-            self.table_size = grid_shape[1]
-            self.feature_dim = grid_shape[2]
-            self.grid_shape = grid_shape
-            self.hash_table = nn.Parameter(torch.randn(*grid_shape[-2:]) * 0.01)
-        
-        def forward(self, coords):
+    def __init__(self,
+                 resolution,
+                 table_size,
+                 feature_dim):
 
-            # [-1, 1] -> [0, grid_size -1]
-            coords = (coords + 1) / 2
-            coords = coords * (self.resolution - 1)
-            x = coords[:, 0]
-            y = coords[:, 1]
+        super().__init__()
 
-            # Integer corner coordinates
-            x0 = torch.floor(x).long()
-            x1 = x0 + 1
+        self.resolution = resolution
+        self.table_size = table_size
+        self.feature_dim = feature_dim
 
-            y0 = torch.floor(y).long()
-            y1 = y0 + 1
-
-            # Clamp bounds
-            x0 = torch.clamp(x0, 0, self.resolution - 1)
-            x1 = torch.clamp(x1, 0, self.resolution - 1)
-
-            y0 = torch.clamp(y0, 0, self.resolution - 1)
-            y1 = torch.clamp(y1, 0, self.resolution - 1)
-            # Retrieve corner features
-            id00 = spatial_hash(torch.stack([x0.float(), y0.float()], dim=-1), self.table_size)  
-            id10 = spatial_hash(torch.stack([x1.float(), y0.float()], dim=-1), self.table_size)
-            id01 = spatial_hash(torch.stack([x0.float(), y1.float()], dim=-1), self.table_size)
-            id11 = spatial_hash(torch.stack([x1.float(), y1.float()], dim=-1), self.table_size)
-            
-            f00 = self.hash_table[id00]
-            f10 = self.hash_table[id10]
-            f01 = self.hash_table[id01]
-            f11 = self.hash_table[id11]
-            # Fractional offsets
-            wx = (x - x0.float()).unsqueeze(-1)
-            wy = (y - y0.float()).unsqueeze(-1)
-
-            # Interpolate along x
-            fx0 = f00 * (1 - wx) + f10 * wx
-            fx1 = f01 * (1 - wx) + f11 * wx
-
-            # Interpolate along y
-            features = fx0 * (1 - wy) + fx1 * wy
-
-            return features
-    
-    
-    class MultiResolutionHashGridEncoder(nn.Module):
-
-            def __init__(self,
-                        resolutions:list[int],
-                        table_size:int,
-                        feature_dim):
-
-                super().__init__()
-
-                self.encoders = nn.ModuleList()
-
-                for resolution in resolutions:
-
-                    grid_shape = (
-                        resolution,
-                        table_size,
-                        feature_dim
-                    )
-
-                    self.encoders.append(
-                        GridEncoder(grid_shape)
-                    )
-
-            def forward(self, coords):
-
-                features = []
-
-                for encoder in self.encoders:
-
-                    feat = encoder(coords)
-
-                    features.append(feat)
-
-                return torch.cat(features, dim=-1)
-    gridencoder = MultiResolutionHashGridEncoder(
-        resolutions=[coarse_grid_res, mid_grid_res, fine_grid_res, ultra_grid_res],
-        table_size=2048,
-        feature_dim=feature_dim
+        self.hash_table = nn.Parameter(
+            torch.randn(table_size, feature_dim) * 0.01
         )
 
-    optimizer = torch.optim.Adam(
-        list(model.parameters()) +
-        list(gridencoder.parameters()),
-        lr=1e-3
-    )
-    for epoch in tqdm(range(1000)):
-        inputs = torch.rand(1024, 2) * 2 - 1  # Random points in [-1, 1]
-        # Circle occupancy labels
-        freq = 10.0
+    def spatial_hash(self, x, y):
 
-        targets = (
-            (
-                torch.sin(freq * inputs[:,0]) *
-                torch.sin(freq * inputs[:,1])
-            ) > 0
-        ).float().unsqueeze(-1)
+        return (
+            (x * 73856093) ^
+            (y * 19349663)
+        ) % self.table_size
 
-        # Forward pass
-        outputs = model(gridencoder(inputs))
+    def forward(self, coords):
 
-        loss = criterion(outputs, targets)
+        coords = (coords + 1) / 2
+        coords = coords * (self.resolution - 1)
 
-        # Backprop
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        x = coords[:, 0]
+        y = coords[:, 1]
 
-        if (epoch + 1) % 100 == 0:
-            print(f"Epoch {epoch+1}, Loss: {loss.item():.6f}")
+        x0 = torch.floor(x).long()
+        x1 = x0 + 1
+
+        y0 = torch.floor(y).long()
+        y1 = y0 + 1
+
+        x0 = torch.clamp(x0, 0, self.resolution - 1)
+        x1 = torch.clamp(x1, 0, self.resolution - 1)
+
+        y0 = torch.clamp(y0, 0, self.resolution - 1)
+        y1 = torch.clamp(y1, 0, self.resolution - 1)
+
+        h00 = self.spatial_hash(x0, y0)
+        h10 = self.spatial_hash(x1, y0)
+
+        h01 = self.spatial_hash(x0, y1)
+        h11 = self.spatial_hash(x1, y1)
+
+        f00 = self.hash_table[h00]
+        f10 = self.hash_table[h10]
+
+        f01 = self.hash_table[h01]
+        f11 = self.hash_table[h11]
+
+        wx = (x - x0.float()).unsqueeze(-1)
+        wy = (y - y0.float()).unsqueeze(-1)
+
+        fx0 = f00 * (1 - wx) + f10 * wx
+        fx1 = f01 * (1 - wx) + f11 * wx
+
+        features = fx0 * (1 - wy) + fx1 * wy
+
+        return features
 
 
-    # ==========================================
-    # Visualization
-    # ==========================================
+# ============================================================
+# Multi Resolution Encoder
+# ============================================================
 
-    resolution = 200
+class MultiResolutionHashEncoder(nn.Module):
+
+    def __init__(self,
+                 resolutions,
+                 table_size,
+                 feature_dim):
+
+        super().__init__()
+
+        self.encoders = nn.ModuleList()
+
+        for resolution in resolutions:
+
+            self.encoders.append(
+                HashGridEncoder(
+                    resolution=resolution,
+                    table_size=table_size,
+                    feature_dim=feature_dim
+                )
+            )
+
+    def forward(self, coords):
+
+        features = []
+
+        for encoder in self.encoders:
+
+            features.append(
+                encoder(coords)
+            )
+
+        return torch.cat(features, dim=-1)
+
+
+# ============================================================
+# ClutterField Predictor
+# ============================================================
+
+class ClutterField(nn.Module):
+
+    def __init__(self,
+                 resolutions,
+                 table_size,
+                 feature_dim):
+
+        super().__init__()
+
+        self.encoder = MultiResolutionHashEncoder(
+            resolutions=resolutions,
+            table_size=table_size,
+            feature_dim=feature_dim
+        )
+
+        total_features = len(resolutions) * feature_dim
+
+        self.decoder = nn.Sequential(
+            nn.Linear(total_features, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, coords):
+
+        features = self.encoder(coords)
+
+        return self.decoder(features)
+
+
+# ============================================================
+# Main
+# ============================================================
+
+if __name__ == '__main__':
+
+    device = 'cpu'
+
+    # ========================================================
+    # Spatial Grid
+    # ========================================================
+
+    resolution = 128
 
     x = torch.linspace(-1, 1, resolution)
     y = torch.linspace(-1, 1, resolution)
 
     xx, yy = torch.meshgrid(x, y, indexing='xy')
 
-    # Create coordinate grid
     coords = torch.stack(
         [xx.flatten(), yy.flatten()],
         dim=-1
+    ).to(device)
+
+    # ========================================================
+    # Static Clutter Background
+    # ========================================================
+
+    background = (
+        0.3 * torch.sin(4 * xx)
+        +
+        0.2 * torch.cos(3 * yy)
     )
 
-    # Run through encoder + model
+    background = background.unsqueeze(-1)
+
+    # ========================================================
+    # Model
+    # ========================================================
+
+    model = ClutterField(
+        resolutions=[16, 32, 64, 128],
+        table_size=512,
+        feature_dim=4
+    ).to(device)
+
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=1e-3
+    )
+
+    criterion = nn.MSELoss()
+
+    # ========================================================
+    # Recursive Scene Memory
+    # ========================================================
+
+    persistent_scene = torch.zeros_like(background)
+
+    decay = 0.995
+    update_rate = 0.005
+
+    # ========================================================
+    # Training Loop
+    # ========================================================
+
+    num_steps = 1000
+
+    for step in tqdm(range(num_steps)):
+
+        # ====================================================
+        # Weak Moving Target
+        # ====================================================
+
+        t = step / 50.0
+
+        target_x = 0.5 * math.sin(t)
+        target_y = 0.5 * math.cos(t)
+
+        target = gaussian_2d(
+            xx,
+            yy,
+            target_x,
+            target_y,
+            sigma=0.04
+        )
+
+        # Very weak target
+        target = 0.05 * target.unsqueeze(-1)
+
+        # ====================================================
+        # Radar Noise
+        # ====================================================
+
+        noise = 0.03 * torch.randn_like(background)
+
+        # ====================================================
+        # Observation
+        # ====================================================
+
+        observation = background + target + noise
+
+        # ====================================================
+        # Recursive Persistent Scene Update
+        # ====================================================
+
+        persistent_scene = (
+            decay * persistent_scene
+            +
+            update_rate * observation
+        )
+
+        # ====================================================
+        # Train Network ONLY On Persistent Scene
+        # ====================================================
+
+        target_scene = persistent_scene.reshape(-1, 1).to(device)
+
+        prediction = model(coords)
+
+        loss = criterion(prediction, target_scene)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if step % 100 == 0:
+            print(f'Step {step} | Loss: {loss.item():.6f}')
+
+    # ========================================================
+    # Final Observation
+    # ========================================================
+
+    final_observation = observation.squeeze(-1)
+
+    # ========================================================
+    # Predicted Persistent Scene
+    # ========================================================
+
     with torch.no_grad():
 
-        features = gridencoder(coords)
+        prediction = model(coords)
 
-        predictions = model(features)
+    prediction = prediction.reshape(resolution, resolution)
 
-    # Reshape into image
-    image = predictions.reshape(resolution, resolution)
+    # ========================================================
+    # Innovation Residual
+    # ========================================================
 
-    # Plot
-    plt.figure(figsize=(6,6))
+    residual = final_observation - prediction
+
+    # ========================================================
+    # Plot Observation
+    # ========================================================
+
+    plt.figure(figsize=(6, 6))
 
     plt.imshow(
-        image.numpy(),
-        extent=[-1,1,-1,1],
+        final_observation.numpy(),
+        extent=[-1, 1, -1, 1],
         origin='lower',
         cmap='viridis'
     )
 
-    plt.colorbar(label='Occupancy Probability')
+    plt.title('Radar Observation')
 
-    plt.title('Grid-Encoded Occupancy Field')
+    plt.colorbar()
 
-    plt.xlabel('X')
-    plt.ylabel('Y')
+    plt.show()
+
+    # ========================================================
+    # Plot Persistent Scene Prediction
+    # ========================================================
+
+    plt.figure(figsize=(6, 6))
+
+    plt.imshow(
+        prediction.numpy(),
+        extent=[-1, 1, -1, 1],
+        origin='lower',
+        cmap='viridis'
+    )
+
+    plt.title('Predicted Persistent Clutter Scene')
+
+    plt.colorbar()
+
+    plt.show()
+
+    # ========================================================
+    # Plot Innovation Residual
+    # ========================================================
+
+    plt.figure(figsize=(6, 6))
+
+    plt.imshow(
+        residual.numpy(),
+        extent=[-1, 1, -1, 1],
+        origin='lower',
+        cmap='inferno'
+    )
+
+    plt.title('Innovation Residual')
+
+    plt.colorbar()
 
     plt.show()
