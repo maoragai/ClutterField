@@ -47,6 +47,7 @@ class HashGridEncoder(nn.Module):
 
     def forward(self, coords):
 
+        # [-1,1] -> [0,resolution-1]
         coords = (coords + 1) / 2
         coords = coords * (self.resolution - 1)
 
@@ -127,7 +128,7 @@ class MultiResolutionHashEncoder(nn.Module):
 
 
 # ============================================================
-# ClutterField Predictor
+# ClutterField
 # ============================================================
 
 class ClutterField(nn.Module):
@@ -150,8 +151,10 @@ class ClutterField(nn.Module):
         self.decoder = nn.Sequential(
             nn.Linear(total_features, 64),
             nn.ReLU(),
+
             nn.Linear(64, 64),
             nn.ReLU(),
+
             nn.Linear(64, 1)
         )
 
@@ -187,7 +190,7 @@ if __name__ == '__main__':
     ).to(device)
 
     # ========================================================
-    # Static Clutter Background
+    # Static Background Clutter
     # ========================================================
 
     background = (
@@ -216,16 +219,21 @@ if __name__ == '__main__':
     criterion = nn.MSELoss()
 
     # ========================================================
-    # Recursive Scene Memory
+    # Persistent Memory
     # ========================================================
 
     persistent_scene = torch.zeros_like(background)
 
-    decay = 0.995
-    update_rate = 0.005
+    innovation_memory = torch.zeros_like(background)
+
+    scene_decay = 0.995
+    scene_update = 0.005
+
+    innovation_decay = 0.99
+    innovation_update = 0.01
 
     # ========================================================
-    # Training Loop
+    # Training
     # ========================================================
 
     num_steps = 1000
@@ -236,7 +244,7 @@ if __name__ == '__main__':
         # Weak Moving Target
         # ====================================================
 
-        t = step / 50.0
+        t = step / 150.0
 
         target_x = 0.5 * math.sin(t)
         target_y = 0.5 * math.cos(t)
@@ -249,14 +257,14 @@ if __name__ == '__main__':
             sigma=0.04
         )
 
-        # Very weak target
-        target = 0.05 * target.unsqueeze(-1)
+        # weak target
+        target = 0.15 * target.unsqueeze(-1)
 
         # ====================================================
-        # Radar Noise
+        # Noise
         # ====================================================
 
-        noise = 0.03 * torch.randn_like(background)
+        noise = 0.02 * torch.randn_like(background)
 
         # ====================================================
         # Observation
@@ -265,17 +273,17 @@ if __name__ == '__main__':
         observation = background + target + noise
 
         # ====================================================
-        # Recursive Persistent Scene Update
+        # Persistent Scene Update
         # ====================================================
 
         persistent_scene = (
-            decay * persistent_scene
+            scene_decay * persistent_scene
             +
-            update_rate * observation
+            scene_update * observation
         )
 
         # ====================================================
-        # Train Network ONLY On Persistent Scene
+        # Train Predictor
         # ====================================================
 
         target_scene = persistent_scene.reshape(-1, 1).to(device)
@@ -285,39 +293,68 @@ if __name__ == '__main__':
         loss = criterion(prediction, target_scene)
 
         optimizer.zero_grad()
+
         loss.backward()
+
         optimizer.step()
 
+        # ====================================================
+        # Innovation Residual
+        # ====================================================
+
+        prediction_image = prediction.reshape(
+            resolution,
+            resolution
+        )
+
+        residual = (
+            observation.squeeze(-1)
+            -
+            prediction_image
+        )
+
+        # ====================================================
+        # Innovation Memory
+        # ====================================================
+
+        innovation_memory = (
+            innovation_decay * innovation_memory
+            +
+            innovation_update * torch.abs(
+                residual.unsqueeze(-1)
+            )
+        )
+
         if step % 100 == 0:
-            print(f'Step {step} | Loss: {loss.item():.6f}')
+
+            print(
+                f'Step {step} | '
+                f'Loss: {loss.item():.6f}'
+            )
 
     # ========================================================
-    # Final Observation
+    # Final Visualization
     # ========================================================
 
     final_observation = observation.squeeze(-1)
 
-    # ========================================================
-    # Predicted Persistent Scene
-    # ========================================================
+    final_prediction = prediction_image
 
-    with torch.no_grad():
+    final_residual = residual
 
-        prediction = model(coords)
-
-    prediction = prediction.reshape(resolution, resolution)
+    final_innovation = innovation_memory.squeeze(-1)
 
     # ========================================================
-    # Innovation Residual
+    # Plot All
     # ========================================================
 
-    residual = final_observation - prediction
+    plt.figure(figsize=(20, 5))
 
     # ========================================================
-    # Plot Observation
+    # Observation
     # ========================================================
 
-    plt.figure(figsize=(6, 6))
+    plt.subplot(1, 4, 1)
 
     plt.imshow(
         final_observation.numpy(),
@@ -330,35 +367,31 @@ if __name__ == '__main__':
 
     plt.colorbar()
 
-    plt.show()
-
     # ========================================================
-    # Plot Persistent Scene Prediction
+    # Prediction
     # ========================================================
 
-    plt.figure(figsize=(6, 6))
+    plt.subplot(1, 4, 2)
 
     plt.imshow(
-        prediction.numpy(),
+        final_prediction.detach().numpy(),
         extent=[-1, 1, -1, 1],
         origin='lower',
         cmap='viridis'
     )
 
-    plt.title('Predicted Persistent Clutter Scene')
+    plt.title('Predicted Scene')
 
     plt.colorbar()
 
-    plt.show()
-
     # ========================================================
-    # Plot Innovation Residual
+    # Residual
     # ========================================================
 
-    plt.figure(figsize=(6, 6))
+    plt.subplot(1, 4, 3)
 
     plt.imshow(
-        residual.numpy(),
+        final_residual.detach().numpy(),
         extent=[-1, 1, -1, 1],
         origin='lower',
         cmap='inferno'
@@ -367,5 +400,24 @@ if __name__ == '__main__':
     plt.title('Innovation Residual')
 
     plt.colorbar()
+
+    # ========================================================
+    # Innovation Memory
+    # ========================================================
+
+    plt.subplot(1, 4, 4)
+
+    plt.imshow(
+        final_innovation.detach().numpy(),
+        extent=[-1, 1, -1, 1],
+        origin='lower',
+        cmap='inferno'
+    )
+
+    plt.title('Accumulated Innovation')
+
+    plt.colorbar()
+
+    plt.tight_layout()
 
     plt.show()
