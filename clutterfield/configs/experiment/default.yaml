@@ -1,0 +1,10 @@
+# Default experiment/training configuration.
+#
+# No training loop is implemented yet; these fields are placeholders for
+# the future recursive predictive field training experiments.
+
+name: baseline
+max_epochs: 100
+batch_size: 8
+learning_rate: 1.0e-3
+checkpoint_dir: checkpoints

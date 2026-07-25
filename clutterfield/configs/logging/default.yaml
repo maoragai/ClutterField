@@ -1,0 +1,6 @@
+# Default logging configuration, consumed by clutterfield.logging_config.setup_logging.
+
+level: INFO
+log_dir: logs
+use_wandb: false
+wandb_project: clutterfield

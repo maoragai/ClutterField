@@ -1,0 +1,15 @@
+# Root Hydra configuration for ClutterField experiments.
+#
+# Composes the radar, experiment, and logging config groups. Override any
+# value on the command line, e.g.:
+#   python experiments/train.py radar=default experiment.max_epochs=50
+
+defaults:
+  - radar: default
+  - experiment: default
+  - logging: default
+  - _self_
+
+seed: 42
+device: mps # one of: cpu, mps, cuda (no CUDA assumed by default)
+output_dir: outputs

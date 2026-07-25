@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+
+# Hydra / experiment outputs
+outputs/
+multirun/
+logs/
+checkpoints/
+
+# WandB
+wandb/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Environment
+.env

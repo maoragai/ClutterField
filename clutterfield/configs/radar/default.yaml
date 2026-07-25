@@ -1,0 +1,28 @@
+# Default radar configuration, mirroring clutterfield.radar.config.RadarConfig.
+
+name: default_radar
+
+waveform:
+  waveform_type: fmcw
+  carrier_frequency_hz: 77.0e9
+  bandwidth_hz: 1.0e9
+  chirp_duration_s: 50.0e-6
+  num_chirps: 128
+  sample_rate_hz: 10.0e6
+
+antenna:
+  num_tx: 1
+  num_rx: 4
+  tx_spacing_m: 0.0
+  rx_spacing_m: 1.9e-3
+
+geometry:
+  max_range_m: 100.0
+  range_bins: 256
+  max_velocity_mps: 30.0
+  velocity_bins: 128
+  azimuth_fov_deg: 120.0
+
+noise:
+  noise_floor_dbm: -90.0
+  clutter_rcs_db: 10.0
